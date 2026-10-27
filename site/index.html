@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Harvard Art NFT Studio</title>
+<style>
+  :root { --bg:#0f1117; --panel:#1a1d27; --text:#eef0f6; --muted:#9aa0b4; --accent:#5aa0ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.4 system-ui, sans-serif; }
+  header { padding:24px 16px 8px; max-width:1200px; margin:auto; }
+  h1 { margin:0 0 4px; font-size:24px; }
+  header p { margin:0; color:var(--muted); }
+  #filter { margin-top:12px; width:100%; max-width:360px; padding:8px 10px; border-radius:8px;
+            border:1px solid #333a4d; background:var(--panel); color:var(--text); }
+  #grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(170px, 1fr)); gap:14px;
+          padding:16px; max-width:1200px; margin:auto; }
+  .tile { background:var(--panel); border:2px solid transparent; border-radius:10px; overflow:hidden;
+          cursor:pointer; padding:0; color:inherit; text-align:left; font:inherit; }
+  .tile:hover, .tile:focus-visible { border-color:var(--accent); outline:none; }
+  .tile img { width:100%; aspect-ratio:1; object-fit:cover; display:block; background:#000; }
+  .tile div { padding:8px 10px; }
+  .tile b { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tile span { color:var(--muted); font-size:13px; }
+  dialog { background:var(--panel); color:var(--text); border:none; border-radius:14px; padding:20px;
+           max-width:min(940px, calc(100vw - 32px)); width:100%; }
+  dialog::backdrop { background:rgba(0,0,0,.7); }
+  .studio { display:flex; gap:20px; flex-wrap:wrap; }
+  canvas { width:100%; max-width:420px; height:auto; border-radius:8px; }
+  .controls { flex:1; min-width:240px; }
+  .controls h2 { margin:0 0 4px; font-size:20px; }
+  .controls label { display:block; margin:14px 0 4px; color:var(--muted); }
+  .controls select, .controls input { width:100%; }
+  .row { display:flex; gap:8px; margin-top:20px; flex-wrap:wrap; }
+  button.btn { padding:9px 14px; border-radius:8px; border:none; background:var(--accent); color:#fff;
+               font:inherit; cursor:pointer; }
+  button.secondary { background:#333a4d; }
+  a { color:var(--accent); }
+  #empty { color:var(--muted); padding:16px; max-width:1200px; margin:auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Harvard Art NFT Studio</h1>
+  <p>Pick an artwork from the Harvard Art Museums to turn it into a collectible card.</p>
+  <input id="filter" type="search" placeholder="Filter by title, artist, culture…">
+</header>
+<div id="empty" hidden></div>
+<main id="grid"></main>
+
+<dialog id="studio">
+  <div class="studio">
+    <canvas id="card" width="600" height="800"></canvas>
+    <div class="controls">
+      <h2 id="s-title"></h2>
+      <div id="s-artist" style="color:var(--muted)"></div>
+      <a id="s-link" target="_blank" rel="noopener">View at the museum ↗</a>
+      <label for="rarity">Rarity</label>
+      <select id="rarity"></select>
+      <label for="pixel">Pixel size: <span id="pixel-val"></span></label>
+      <input id="pixel" type="range" min="1" max="40" step="1">
+      <label for="token">Token #</label>
+      <input id="token" type="number" min="1" value="1">
+      <div class="row">
+        <button class="btn" id="dl-png">Download card PNG</button>
+        <button class="btn" id="dl-json">Download metadata JSON</button>
+        <button class="btn secondary" id="close">Close</button>
+      </div>
+    </div>
+  </div>
+</dialog>
+
+<script>
+const PALETTES = {
+  Common:    ["#282830", "#b4b4be"],
+  Rare:      ["#14285a", "#5aa0ff"],
+  Epic:      ["#3c145a", "#c86eff"],
+  Legendary: ["#5a3c0a", "#ffc83c"],
+};
+const W = 600, H = 800, ART = 520;
+const $ = (id) => document.getElementById(id);
+let items = [], current = null, currentImg = null;
+
+// Deterministic default traits from the object id.
+function hash(n) {
+  let h = 2166136261;
+  for (const c of String(n)) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+function defaultTraits(id) {
+  const h = hash(id), roll = (h & 0xff) / 255;
+  const rarity = roll > .95 ? "Legendary" : roll > .8 ? "Epic" : roll > .5 ? "Rare" : "Common";
+  return { rarity, pixel: [8, 12, 16, 24, 32][(h >> 8) % 5] };
+}
+
+function fit(ctx, text, maxW) {
+  if (ctx.measureText(text).width <= maxW) return text;
+  while (text.length && ctx.measureText(text + "…").width > maxW) text = text.slice(0, -1);
+  return text + "…";
+}
+
+function render() {
+  const ctx = $("card").getContext("2d");
+  const rarity = $("rarity").value, pixel = +$("pixel").value;
+  const [bg, accent] = PALETTES[rarity];
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+  const x0 = (W - ART) / 2;
+  ctx.fillStyle = accent; ctx.fillRect(x0 - 6, 34, ART + 12, ART + 12);
+
+  // Center-crop to a square, shrink, then upscale without smoothing = pixel art.
+  const img = currentImg, s = Math.min(img.width, img.height);
+  const sx = (img.width - s) / 2, sy = (img.height - s) / 2;
+  const n = Math.max(1, Math.round(ART / pixel));
+  const small = document.createElement("canvas"); small.width = small.height = n;
+  small.getContext("2d").drawImage(img, sx, sy, s, s, 0, 0, n, n);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(small, 0, 0, n, n, x0, 40, ART, ART);
+  ctx.imageSmoothingEnabled = true;
+
+  ctx.textBaseline = "top";
+  ctx.fillStyle = "#fff"; ctx.font = "bold 26px system-ui, sans-serif";
+  ctx.fillText(fit(ctx, current.title, ART), x0, 590);
+  ctx.fillStyle = accent; ctx.font = "bold 18px system-ui, sans-serif";
+  ctx.fillText(fit(ctx, current.artist, ART), x0, 628);
+  ctx.fillStyle = "#c8c8c8"; ctx.font = "16px system-ui, sans-serif";
+  ctx.fillText(fit(ctx, current.dated, ART), x0, 656);
+  ctx.fillStyle = accent; ctx.font = "bold 28px system-ui, sans-serif";
+  ctx.fillText("#" + String($("token").value).padStart(4, "0"), x0, 740);
+  ctx.font = "bold 20px system-ui, sans-serif"; ctx.textAlign = "right";
+  ctx.fillText(rarity.toUpperCase(), W - x0, 746); ctx.textAlign = "left";
+  ctx.strokeStyle = accent; ctx.lineWidth = 4; ctx.strokeRect(2, 2, W - 4, H - 4);
+  $("pixel-val").textContent = pixel + "px";
+}
+
+function metadata() {
+  const t = $("token").value;
+  const attrs = [
+    ["Rarity", $("rarity").value], ["Pixel Size", +$("pixel").value],
+    ["Classification", current.classification], ["Culture", current.culture],
+    ["Century", current.century], ["Medium", current.medium],
+  ].filter(([, v]) => v !== null && v !== undefined && v !== "")
+   .map(([trait_type, value]) => ({ trait_type, value }));
+  return {
+    name: `${current.title} #${t}`,
+    description: `Pixel tribute to Harvard Art Museums object ${current.id}. Original: ${current.url}`,
+    image: `ipfs://REPLACE_ME/${t}.png`,
+    external_url: current.url,
+    attributes: attrs,
+    source: { museum: "Harvard Art Museums", object_id: current.id },
+  };
+}
+
+function download(name, href) {
+  const a = document.createElement("a"); a.href = href; a.download = name; a.click();
+}
+
+function open(item) {
+  current = item;
+  const t = defaultTraits(item.id);
+  $("rarity").value = t.rarity; $("pixel").value = t.pixel;
+  $("s-title").textContent = item.title;
+  $("s-artist").textContent = [item.artist, item.dated].filter(Boolean).join(" · ");
+  $("s-link").href = item.url;
+  currentImg = new Image();
+  currentImg.onload = render;
+  currentImg.src = item.image;
+  $("studio").showModal();
+}
+
+function showGrid() {
+  const q = $("filter").value.toLowerCase();
+  const grid = $("grid"); grid.replaceChildren();
+  for (const it of items) {
+    const text = [it.title, it.artist, it.culture, it.classification].join(" ").toLowerCase();
+    if (q && !text.includes(q)) continue;
+    const b = document.createElement("button"); b.className = "tile";
+    const img = document.createElement("img"); img.src = it.image; img.alt = it.title; img.loading = "lazy";
+    const d = document.createElement("div");
+    const t = document.createElement("b"); t.textContent = it.title;
+    const a = document.createElement("span"); a.textContent = it.artist;
+    d.append(t, a); b.append(img, d);
+    b.onclick = () => open(it);
+    grid.append(b);
+  }
+}
+
+$("rarity").append(...Object.keys(PALETTES).map(k => new Option(k, k)));
+for (const id of ["rarity", "pixel", "token"]) $(id).addEventListener("input", () => currentImg && render());
+$("filter").addEventListener("input", showGrid);
+$("close").onclick = () => $("studio").close();
+$("dl-png").onclick = () => download(`${$("token").value}.png`, $("card").toDataURL("image/png"));
+$("dl-json").onclick = () => download(`${$("token").value}.json`,
+  URL.createObjectURL(new Blob([JSON.stringify(metadata(), null, 2)], { type: "application/json" })));
+
+fetch("gallery.json")
+  .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+  .then(data => { items = data; showGrid(); })
+  .catch(() => { $("empty").hidden = false;
+    $("empty").textContent = "No gallery yet. Run the “Build gallery” workflow in the Actions tab."; });
+</script>
+</body>
+</html>
