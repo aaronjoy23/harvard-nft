@@ -162,7 +162,9 @@ function open(item) {
   $("s-artist").textContent = [item.artist, item.dated].filter(Boolean).join(" · ");
   $("s-link").href = item.url;
   currentImg = new Image();
+  currentImg.crossOrigin = "anonymous";  // needed to export the canvas
   currentImg.onload = render;
+  currentImg.onerror = () => alert("Couldn't load this image from Harvard. Try another artwork.");
   currentImg.src = item.image;
   $("studio").showModal();
 }
@@ -174,7 +176,7 @@ function showGrid() {
     const text = [it.title, it.artist, it.culture, it.classification].join(" ").toLowerCase();
     if (q && !text.includes(q)) continue;
     const b = document.createElement("button"); b.className = "tile";
-    const img = document.createElement("img"); img.src = it.image; img.alt = it.title; img.loading = "lazy";
+    const img = document.createElement("img"); img.src = it.thumb || it.image; img.alt = it.title; img.loading = "lazy";
     const d = document.createElement("div");
     const t = document.createElement("b"); t.textContent = it.title;
     const a = document.createElement("span"); a.textContent = it.artist;
@@ -188,7 +190,10 @@ $("rarity").append(...Object.keys(PALETTES).map(k => new Option(k, k)));
 for (const id of ["rarity", "pixel", "token"]) $(id).addEventListener("input", () => currentImg && render());
 $("filter").addEventListener("input", showGrid);
 $("close").onclick = () => $("studio").close();
-$("dl-png").onclick = () => download(`${$("token").value}.png`, $("card").toDataURL("image/png"));
+$("dl-png").onclick = () => {
+  try { download(`${$("token").value}.png`, $("card").toDataURL("image/png")); }
+  catch { alert("Harvard's image server didn't allow exporting this one. Try another artwork."); }
+};
 $("dl-json").onclick = () => download(`${$("token").value}.json`,
   URL.createObjectURL(new Blob([JSON.stringify(metadata(), null, 2)], { type: "application/json" })));
 

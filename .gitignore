@@ -1,5 +1,4 @@
 output/
 .env
 __pycache__/
-site/img/
 site/gallery.json

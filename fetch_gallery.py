@@ -1,20 +1,26 @@
 """Fetch artworks from the Harvard Art Museums API into a static gallery.
 
-Writes site/gallery.json and site/img/<objectid>.jpg. Images are stored
-alongside the page so the browser can draw them onto a canvas (no CORS issues).
+Writes site/gallery.json. Images are not downloaded here; the visitor's
+browser loads them from Harvard's IIIF image service when the page is viewed.
 """
 import argparse
-import io
 import json
 import os
 from pathlib import Path
 
 import requests
-from PIL import Image
 
 API_URL = "https://api.harvardartmuseums.org/object"
 FIELDS = ("objectid,title,dated,culture,classification,medium,people,"
-          "primaryimageurl,url,century,imagepermissionlevel")
+          "primaryimageurl,url,century,imagepermissionlevel,images")
+
+
+def image_url(obj, width):
+    """Prefer the IIIF service (sizable, CORS-enabled) over the nrs redirect."""
+    for im in obj.get("images") or []:
+        if im.get("iiifbaseuri"):
+            return f"{im['iiifbaseuri']}/full/{width},/0/default.jpg"
+    return f"{obj['primaryimageurl']}?width={width}"
 
 
 def fetch_page(api_key, page, size, classification):
@@ -39,7 +45,7 @@ def main():
         raise SystemExit("Set the HARVARD_API_KEY environment variable.")
 
     out = Path(args.out)
-    (out / "img").mkdir(parents=True, exist_ok=True)
+    out.mkdir(parents=True, exist_ok=True)
     items, seen = [], set()
     for page in range(1, 11):
         if len(items) >= args.count:
@@ -56,15 +62,6 @@ def main():
                     or obj["objectid"] in seen):
                 continue
             seen.add(obj["objectid"])
-            try:
-                resp = requests.get(obj["primaryimageurl"] + "?width=800", timeout=60)
-                resp.raise_for_status()
-                img = Image.open(io.BytesIO(resp.content)).convert("RGB")
-                img.thumbnail((800, 800))
-                img.save(out / "img" / f"{obj['objectid']}.jpg", quality=85)
-            except Exception as e:
-                print(f"  skip {obj['objectid']}: {e}")
-                continue
             items.append({
                 "id": obj["objectid"],
                 "title": obj.get("title") or "Untitled",
@@ -75,7 +72,8 @@ def main():
                 "classification": obj.get("classification"),
                 "medium": obj.get("medium"),
                 "url": obj.get("url"),
-                "image": f"img/{obj['objectid']}.jpg",
+                "thumb": image_url(obj, 400),
+                "image": image_url(obj, 800),
             })
             print(f"  + {obj['objectid']} {items[-1]['title']}")
 
