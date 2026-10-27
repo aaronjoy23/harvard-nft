@@ -32,3 +32,4 @@ jobs:
         with:
           name: nft-cards
           path: output/
+          if-no-files-found: error

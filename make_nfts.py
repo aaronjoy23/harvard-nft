@@ -32,16 +32,19 @@ def fetch_objects(api_key, count, classification=None, page=1):
         "size": count,
         "page": page,
         "hasimage": 1,
-        "q": "imagepermissionlevel:0",  # only freely displayable images
         "fields": "objectid,title,dated,culture,classification,medium,"
-                  "people,primaryimageurl,url,century",
+                  "people,primaryimageurl,url,century,imagepermissionlevel",
         "sort": "random",
     }
     if classification:
         params["classification"] = classification
     r = requests.get(API_URL, params=params, timeout=30)
     r.raise_for_status()
-    return [o for o in r.json().get("records", []) if o.get("primaryimageurl")]
+    records = r.json().get("records", [])
+    print(f"API returned {len(records)} records")
+    # imagepermissionlevel 0 = image may be freely displayed
+    return [o for o in records
+            if o.get("primaryimageurl") and not o.get("imagepermissionlevel")]
 
 
 def traits_for(obj):
@@ -127,7 +130,8 @@ def main():
     (out / "images").mkdir(parents=True, exist_ok=True)
     (out / "metadata").mkdir(parents=True, exist_ok=True)
 
-    objs = fetch_objects(api_key, args.count, args.classification)
+    # Over-fetch since some records lack usable images.
+    objs = fetch_objects(api_key, min(args.count * 3, 100), args.classification)[:args.count]
     print(f"Fetched {len(objs)} objects with images")
     token_id = 0
     for obj in objs:
@@ -145,6 +149,9 @@ def main():
                               f"{args.image_base_uri}{token_id}.png")
         (out / "metadata" / f"{token_id}.json").write_text(json.dumps(meta, indent=2))
         print(f"  #{token_id} [{rarity}] {obj.get('title')}")
+
+    if token_id == 0:
+        raise SystemExit("No cards were generated - see messages above.")
 
 
 if __name__ == "__main__":
