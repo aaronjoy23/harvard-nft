@@ -1,0 +1,34 @@
+name: Generate NFT cards
+on:
+  workflow_dispatch:
+    inputs:
+      count:
+        description: Number of artworks
+        default: "10"
+      classification:
+        description: "Optional (e.g. Paintings)"
+        default: ""
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Generate
+        env:
+          HARVARD_API_KEY: ${{ secrets.HARVARD_API_KEY }}
+          COUNT: ${{ inputs.count }}
+          CLASSIFICATION: ${{ inputs.classification }}
+        run: |
+          if [ -n "$CLASSIFICATION" ]; then
+            python make_nfts.py --count "$COUNT" --classification "$CLASSIFICATION"
+          else
+            python make_nfts.py --count "$COUNT"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nft-cards
+          path: output/
